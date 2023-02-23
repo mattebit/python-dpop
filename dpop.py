@@ -5,21 +5,24 @@ import os
 
 import authlib.jose
 import jwt
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, PrivateFormat, NoEncryption
-import requests
+import jwt.algorithms
 
 # This package implements the IETF draft https://datatracker.ietf.org/doc/html/draft-ietf-oauth-dpop
+
+REQUIRED_CLAIMS = ["jti", "htm", "htu", "iat"]
+SUPPORTED_ALGS = ["ES384"]
 
 
 def generate_dpop_proof(http_method: str,
                         http_url: str,
                         private_key: bytes,
                         public_key: bytes,
+                        alg: str = "ES384",
                         nonce: str = "",
                         access_token: str = ""):
     """
-    Generates a dpop proof JWT.
+    Generates a dpop proof JWT. Used by a client to generate a DPoP proof to be send to the server
+    :param alg:
     :param http_method: the method of the request where the DPoP proof will be inserted
     :param http_url: the url of the request where the DPoP proof will be inserted
     :param private_key: the private key to use to sign the JWT
@@ -41,11 +44,11 @@ def generate_dpop_proof(http_method: str,
     jti = str(base64.b64encode(os.urandom(12)), "utf-8")
 
     header = {
-            "jti": jti,
-            "htm": http_method,
-            "htu": http_url,
-            "iat": (datetime.datetime.now() - datetime.timedelta(seconds=5)).timestamp()
-        }
+        "jti": jti,
+        "htm": http_method,
+        "htu": http_url,
+        "iat": (datetime.datetime.now() - datetime.timedelta(seconds=5)).timestamp()
+    }
 
     if nonce != "":
         header["nonce"] = nonce
@@ -58,7 +61,7 @@ def generate_dpop_proof(http_method: str,
     encoded_jwt = jwt.encode(
         header,
         private_key,
-        algorithm="ES384",  # MUST NOT BE symmetric
+        algorithm=alg,  # MUST NOT BE symmetric
         headers={
             "typ": "dpop+jwt",
             "key": public_jwk.as_dict()  # representation of the public key in JWK
@@ -67,5 +70,64 @@ def generate_dpop_proof(http_method: str,
     return encoded_jwt
 
 
-def validate_dpop_proof(req: requests.request):
-    pass
+def validate_dpop_proof(dpop_proof_jwt: str,
+                        http_method: str,
+                        http_url: str,
+                        alg: str = "ES384",
+                        nonce: str = "",
+                        presented_access_token: str = "") -> bool:
+    """
+    Used to validate a DPoP proof received from a client.
+    :param dpop_proof_jwt:
+    :param http_method:
+    :param http_url:
+    :param alg:
+    :param nonce:
+    :param presented_access_token:
+    :return: true if the DPoP proof is valid, False otherwise
+    """
+
+    header = jwt.get_unverified_header(dpop_proof_jwt)
+
+    if header["typ"] != "dpop+jwt":
+        return False
+
+    if not header["alg"] in SUPPORTED_ALGS:
+        return False
+
+    public_key = jwt.algorithms.ECAlgorithm.from_jwk(header["key"])
+    # TODO: verify jwk is a public key
+
+    try:
+        body = jwt.decode(dpop_proof_jwt, public_key, alg)
+    except jwt.DecodeError:
+        return False
+
+    try:
+        for i in REQUIRED_CLAIMS:
+            if body[i] is None:
+                return False
+    except KeyError:
+        return False
+
+    if body['htm'] != http_method:
+        return False
+
+    if body["htu"] != http_url:
+        return False
+
+    if nonce != "":
+        if body["nonce"] != nonce:
+            return False
+
+    iat = datetime.datetime.fromtimestamp(body["iat"])
+    if (iat - datetime.datetime.now()) > datetime.timedelta(hours=24):  # TODO: check if it is reasonable
+        return False
+
+    if presented_access_token != "":
+        base64_token = base64.b64encode(bytes(presented_access_token, "ascii"))
+        h = hashlib.sha256(base64_token).hexdigest()
+        if not body["ath"] == h:
+            return False
+
+    return True
