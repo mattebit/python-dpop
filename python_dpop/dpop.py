@@ -5,7 +5,6 @@ import os
 
 import authlib.jose
 import jwt
-import jwt.algorithms
 
 # This package implements the IETF draft https://datatracker.ietf.org/doc/html/draft-ietf-oauth-dpop
 
@@ -17,6 +16,8 @@ def generate_dpop_proof(http_method: str,
                         http_url: str,
                         private_key: bytes,
                         public_key: bytes,
+                        body: dict[str: str] = None,
+                        headers: dict[str: str] = None,
                         alg: str = "ES384",
                         nonce: str = "",
                         access_token: str = ""):
@@ -25,6 +26,9 @@ def generate_dpop_proof(http_method: str,
     :param alg:
     :param http_method: the method of the request where the DPoP proof will be inserted
     :param http_url: the url of the request where the DPoP proof will be inserted
+    :param body: If you need to add content in the body
+    :param headers: If you need additional headers pass them here. Note that if a header is already present,it will be
+        overwritten with the new given value
     :param private_key: the private key to use to sign the JWT
     :param public_key: the public key to be attached to the JWT
     :param nonce: When the authentication server or resource server provides a DPoP-Nonce HTTP header in a response
@@ -44,11 +48,17 @@ def generate_dpop_proof(http_method: str,
     jti = str(base64.b64encode(os.urandom(12)), "utf-8")
 
     header = {
+        "typ": "dpop+jwt",
+        "key": public_jwk.as_dict(),  # representation of the public key in JWK
         "jti": jti,
         "htm": http_method,
         "htu": http_url,
         "iat": (datetime.datetime.now() - datetime.timedelta(seconds=5)).timestamp()
     }
+
+    if headers is not None:
+        for k in headers.keys():
+            header[k] = headers[k]
 
     if nonce != "":
         header["nonce"] = nonce
@@ -59,13 +69,10 @@ def generate_dpop_proof(http_method: str,
         header["ath"] = h
 
     encoded_jwt = jwt.encode(
-        header,
+        body if body is not None else {},
         private_key,
         algorithm=alg,  # MUST NOT BE symmetric
-        headers={
-            "typ": "dpop+jwt",
-            "key": public_jwk.as_dict()  # representation of the public key in JWK
-        })
+        headers=header)
 
     return encoded_jwt
 
@@ -105,29 +112,29 @@ def validate_dpop_proof(dpop_proof_jwt: str,
 
     try:
         for i in REQUIRED_CLAIMS:
-            if body[i] is None:
+            if header[i] is None:
                 return False
     except KeyError:
         return False
 
-    if body['htm'] != http_method:
+    if header['htm'] != http_method:
         return False
 
-    if body["htu"] != http_url:
+    if header["htu"] != http_url:
         return False
 
     if nonce != "":
-        if body["nonce"] != nonce:
+        if header["nonce"] != nonce:
             return False
 
-    iat = datetime.datetime.fromtimestamp(body["iat"])
+    iat = datetime.datetime.fromtimestamp(header["iat"])
     if (iat - datetime.datetime.now()) > datetime.timedelta(hours=24):  # TODO: check if it is reasonable
         return False
 
     if presented_access_token != "":
         base64_token = base64.b64encode(bytes(presented_access_token, "ascii"))
         h = hashlib.sha256(base64_token).hexdigest()
-        if not body["ath"] == h:
+        if not header["ath"] == h:
             return False
 
     return True
