@@ -3,7 +3,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, PrivateFormat, NoEncryption
 
-from dpop import generate_dpop_proof, validate_dpop_proof
+from python_dpop.dpop import generate_dpop_proof, validate_dpop_proof
 
 
 def test_generate_dpop_proof():
@@ -51,3 +51,15 @@ def test_validate_dpop():
         "GET",
         "google.com",
         presented_access_token="a_random1tokenvalues")
+
+    public_jwk = authlib.jose.JsonWebKey.import_key(
+        public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+    ).as_dict()
+
+    assert validate_dpop_proof(
+        encoded_jwt,
+        "GET",
+        "google.com",
+        presented_access_token="a_random1tokenvalues",
+        key_check=True,
+        public_keys=[public_jwk])

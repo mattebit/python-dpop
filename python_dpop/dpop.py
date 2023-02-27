@@ -5,6 +5,8 @@ import os
 
 import authlib.jose
 import jwt
+import jwt.algorithms
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
 
 # This package implements the IETF draft https://datatracker.ietf.org/doc/html/draft-ietf-oauth-dpop
 
@@ -80,11 +82,15 @@ def generate_dpop_proof(http_method: str,
 def validate_dpop_proof(dpop_proof_jwt: str,
                         http_method: str,
                         http_url: str,
+                        key_check: bool = False,
                         alg: str = "ES384",
                         nonce: str = "",
-                        presented_access_token: str = "") -> bool:
+                        presented_access_token: str = "",
+                        public_keys: list[dict[str:str]] = None) -> bool:
     """
     Used to validate a DPoP proof received from a client.
+    :param public_keys: With this variable, you can provide a list of public_keys (in jwk format) to check if the
+        public key of the dpop matches one of them
     :param dpop_proof_jwt:
     :param http_method:
     :param http_url:
@@ -102,8 +108,18 @@ def validate_dpop_proof(dpop_proof_jwt: str,
     if not header["alg"] in SUPPORTED_ALGS:
         return False
 
+    if key_check:
+        if public_keys is None:
+            raise ValueError("public_keys parameter is None")
+
+        if not header["key"] in public_keys:
+            return False
+
     public_key = jwt.algorithms.ECAlgorithm.from_jwk(header["key"])
-    # TODO: verify jwk is a public key
+
+    # verify jwk is a public key
+    if not isinstance(public_key, EllipticCurvePublicKey):
+        return False
 
     try:
         body = jwt.decode(dpop_proof_jwt, public_key, alg)
