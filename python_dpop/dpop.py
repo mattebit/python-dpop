@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
 # This package implements the IETF draft https://datatracker.ietf.org/doc/html/draft-ietf-oauth-dpop
 
 REQUIRED_CLAIMS = ["jti", "htm", "htu", "iat"]
-SUPPORTED_ALGS = ["ES384"]
+SUPPORTED_ALGS = ["EdDSA"]
 
 
 def generate_dpop_proof(http_method: str,
@@ -20,7 +20,7 @@ def generate_dpop_proof(http_method: str,
                         public_key: bytes,
                         body: dict[str: str] = None,
                         headers: dict[str: str] = None,
-                        alg: str = "ES384",
+                        alg: str = "EdDSA",
                         nonce: str = "",
                         access_token: str = ""):
     """
@@ -83,10 +83,11 @@ def validate_dpop_proof(dpop_proof_jwt: str,
                         http_method: str,
                         http_url: str,
                         key_check: bool = False,
-                        alg: str = "ES384",
+                        alg: str = "EdDSA",
                         nonce: str = "",
                         presented_access_token: str = "",
-                        public_keys: list[dict[str:str]] = None) -> bool:
+                        public_keys: list[dict[str:str]] = None) \
+        -> tuple[bool, dict[str:str] | None, dict[str:str] | None]:
     """
     Used to validate a DPoP proof received from a client.
     :param public_keys: With this variable, you can provide a list of public_keys (in jwk format) to check if the
@@ -97,60 +98,60 @@ def validate_dpop_proof(dpop_proof_jwt: str,
     :param alg:
     :param nonce:
     :param presented_access_token:
-    :return: true if the DPoP proof is valid, False otherwise
+    :return: a tuple containing (isvalid, header, body)
     """
 
     header = jwt.get_unverified_header(dpop_proof_jwt)
 
     if header["typ"] != "dpop+jwt":
-        return False
+        return False, None, None
 
     if not header["alg"] in SUPPORTED_ALGS:
-        return False
+        return False, None, None
 
     if key_check:
         if public_keys is None:
             raise ValueError("public_keys parameter is None")
 
         if not header["key"] in public_keys:
-            return False
+            return False, None, None
 
     public_key = jwt.algorithms.ECAlgorithm.from_jwk(header["key"])
 
     # verify jwk is a public key
     if not isinstance(public_key, EllipticCurvePublicKey):
-        return False
+        return False, None, None
 
     try:
         body = jwt.decode(dpop_proof_jwt, public_key, alg)
     except jwt.DecodeError:
-        return False
+        return False, None, None
 
     try:
         for i in REQUIRED_CLAIMS:
             if header[i] is None:
-                return False
+                return False, None, None
     except KeyError:
-        return False
+        return False, None, None
 
     if header['htm'] != http_method:
-        return False
+        return False, None, None
 
     if header["htu"] != http_url:
-        return False
+        return False, None, None
 
     if nonce != "":
         if header["nonce"] != nonce:
-            return False
+            return False, None, None
 
     iat = datetime.datetime.fromtimestamp(header["iat"])
     if (iat - datetime.datetime.now()) > datetime.timedelta(hours=24):  # TODO: check if it is reasonable
-        return False
+        return False, None, None
 
     if presented_access_token != "":
         base64_token = base64.b64encode(bytes(presented_access_token, "ascii"))
         h = hashlib.sha256(base64_token).hexdigest()
         if not header["ath"] == h:
-            return False
+            return False, None, None
 
-    return True
+    return True, header, body
