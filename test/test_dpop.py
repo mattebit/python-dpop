@@ -43,23 +43,39 @@ def test_validate_dpop():
         "google.com",
         private_key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()),
         public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo),
-        access_token="a_random1tokenvalues"
+        access_token="a_random1tokenvalues",
     )
 
+    # Standard valid proof
     assert validate_dpop_proof(
         encoded_jwt,
         "GET",
         "google.com",
-        presented_access_token="a_random1tokenvalues") is not False
+        presented_access_token="a_random1tokenvalues")[0] is not False
 
-    public_jwk = authlib.jose.JsonWebKey.import_key(
-        public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
-    ).as_dict()
+    public_key_str = str(public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo), "utf-8")
 
+    # validate key
     assert validate_dpop_proof(
         encoded_jwt,
         "GET",
         "google.com",
         presented_access_token="a_random1tokenvalues",
-        key_check=True,
-        public_keys=[public_jwk]) is not False
+        public_keys_nonce={public_key_str: ""})[0] is not False
+
+    # Wong signing key
+    assert validate_dpop_proof(
+        encoded_jwt,
+        "GET",
+        "google.com",
+        presented_access_token="a_random1tokenvalues",
+        public_keys_nonce={"wrong signing key": "arandomnonce"})[0] is False
+
+    # Wong nonce in dpop
+    assert validate_dpop_proof(
+        encoded_jwt,
+        "GET",
+        "google.com",
+        presented_access_token="a_random1tokenvalues",
+        public_keys_nonce={public_key_str: "arandomnonce"})[0] is False
+

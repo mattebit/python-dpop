@@ -4,6 +4,9 @@ import hashlib
 import os
 
 import authlib.jose
+from cryptography.hazmat.primitives._serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from django.http import HttpRequest
 import jwt
 import jwt.algorithms
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
@@ -82,22 +85,21 @@ def generate_dpop_proof(http_method: str,
 def validate_dpop_proof(dpop_proof_jwt: str,
                         http_method: str,
                         http_url: str,
-                        key_check: bool = False,
-                        alg: str = "EdDSA",
-                        nonce: str = "",
                         presented_access_token: str = "",
-                        public_keys: list[dict[str:str]] = None) \
+                        public_keys_nonce: dict[str:str] = None) \
         -> tuple[bool, dict[str:str] | None, dict[str:str] | None]:
     """
     Used to validate a DPoP proof received from a client.
-    :param public_keys: With this variable, you can provide a list of public_keys (in jwk format) to check if the
-        public key of the dpop matches one of them
-    :param dpop_proof_jwt:
-    :param http_method:
-    :param http_url:
-    :param alg:
-    :param nonce:
-    :param presented_access_token:
+    :param public_keys_nonce: If you want to check that the dpop jwt is using one of the previous registered public keys
+        With this variable, you can provide the public_keys (in str of bytes format) to check if the public key of the
+        dpop matches one of them. As keys of the dictionary provide the public key, as value you can insert a nonce, if
+        you hava previously issued one. Note that if nothing is provided, the dpop proof will be checked only as
+        "self-signed".
+    :param dpop_proof_jwt: the dpop proof jwt, string as received in the request
+    :param http_method: the method of the request that contained the dpop proof
+    :param http_url: the url of the request that contained the dopo proof
+    :param presented_access_token: insert the access token presented by the client in his request to validate it against
+     the dpop proof
     :return: a tuple containing (isvalid, header, body)
     """
 
@@ -109,21 +111,36 @@ def validate_dpop_proof(dpop_proof_jwt: str,
     if not header["alg"] in SUPPORTED_ALGS:
         return False, None, None
 
-    if key_check:
-        if public_keys is None:
+    public_key = jwt.algorithms.OKPAlgorithm.from_jwk(header["key"])
+
+    if public_keys_nonce is not None:
+        if public_keys_nonce is None:
             raise ValueError("public_keys parameter is None")
 
-        if not header["key"] in public_keys:
+        found = False
+        for k in public_keys_nonce.keys():
+            if str(public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo), "utf-8") == k:
+                found = True
+                if public_keys_nonce[k] != "":
+                    # if nonce is present with key check it wrt the value in the dpop
+                    try:
+                        found = (header["nonce"] == public_keys_nonce[k])
+                    except KeyError:
+                        found = False
+
+        if not found:
             return False, None, None
 
-    public_key = jwt.algorithms.ECAlgorithm.from_jwk(header["key"])
+        if not str(public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo), "utf-8") \
+               in public_keys_nonce.keys():
+            return False, None, None
 
     # verify jwk is a public key
-    if not isinstance(public_key, EllipticCurvePublicKey):
+    if not isinstance(public_key, Ed25519PublicKey):
         return False, None, None
 
     try:
-        body = jwt.decode(dpop_proof_jwt, public_key, alg)
+        body = jwt.decode(dpop_proof_jwt, public_key, header["alg"])
     except jwt.DecodeError:
         return False, None, None
 
@@ -138,11 +155,8 @@ def validate_dpop_proof(dpop_proof_jwt: str,
         return False, None, None
 
     if header["htu"] != http_url:
+        # TODO: normalize url check RFC
         return False, None, None
-
-    if nonce != "":
-        if header["nonce"] != nonce:
-            return False, None, None
 
     iat = datetime.datetime.fromtimestamp(header["iat"])
     if (iat - datetime.datetime.now()) > datetime.timedelta(hours=24):  # TODO: check if it is reasonable
