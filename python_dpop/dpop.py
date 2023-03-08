@@ -2,6 +2,7 @@ import base64
 import datetime
 import hashlib
 import os
+from urllib.parse import urlparse
 
 import authlib.jose
 import jwt
@@ -42,9 +43,6 @@ def generate_dpop_proof(http_method: str,
         public_key
     )
 
-    # TODO: validate url and keep only URI
-    # TODO validate method
-
     header = {
         "typ": "dpop+jwt",
         "key": public_jwk.as_dict()  # representation of the public key in JWK
@@ -57,10 +55,14 @@ def generate_dpop_proof(http_method: str,
     # Unique identifier 96 bits random
     jti = str(base64.b64encode(os.urandom(12)), "utf-8")
 
+    url_parsed = urlparse(http_url)
+    # Url needs to be cleaned by any query element or fragments https://docs.python.org/3/library/urllib.parse.html
+    normalized_url = f"{url_parsed.scheme}://{url_parsed.netloc}{url_parsed.path}"
+
     body = {
         "jti": jti,
         "htm": http_method,
-        "htu": http_url,  # TODO: normalize the URL
+        "htu": normalized_url,
         "iat": (datetime.datetime.now() - datetime.timedelta(seconds=5)).timestamp()
     }
 
@@ -155,8 +157,11 @@ def validate_dpop_proof(dpop_proof_jwt: str,
     if body['htm'] != http_method:
         return False, None, None
 
-    if body["htu"] != http_url:
-        # TODO: normalize url check RFC
+    url_parsed = urlparse(http_url)
+    # Url needs to be cleaned by any query element or fragments https://docs.python.org/3/library/urllib.parse.html
+    normalized_url = f"{url_parsed.scheme}://{url_parsed.netloc}{url_parsed.path}"
+
+    if body["htu"] != normalized_url:
         return False, None, None
 
     iat = datetime.datetime.fromtimestamp(body["iat"])
