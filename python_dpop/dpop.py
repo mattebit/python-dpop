@@ -4,12 +4,10 @@ import hashlib
 import os
 
 import authlib.jose
-from cryptography.hazmat.primitives._serialization import Encoding, PublicFormat
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from django.http import HttpRequest
 import jwt
 import jwt.algorithms
-from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
+from cryptography.hazmat.primitives._serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 # This package implements the IETF draft https://datatracker.ietf.org/doc/html/draft-ietf-oauth-dpop
 
@@ -21,7 +19,6 @@ def generate_dpop_proof(http_method: str,
                         http_url: str,
                         private_key: bytes,
                         public_key: bytes,
-                        body: dict[str: str] = None,
                         headers: dict[str: str] = None,
                         alg: str = "EdDSA",
                         nonce: str = "",
@@ -31,7 +28,6 @@ def generate_dpop_proof(http_method: str,
     :param alg:
     :param http_method: the method of the request where the DPoP proof will be inserted
     :param http_url: the url of the request where the DPoP proof will be inserted
-    :param body: If you need to add content in the body
     :param headers: If you need additional headers pass them here. Note that if a header is already present,it will be
         overwritten with the new given value
     :param private_key: the private key to use to sign the JWT
@@ -49,32 +45,34 @@ def generate_dpop_proof(http_method: str,
     # TODO: validate url and keep only URI
     # TODO validate method
 
-    # Unique identifier 96 bits random
-    jti = str(base64.b64encode(os.urandom(12)), "utf-8")
-
     header = {
         "typ": "dpop+jwt",
-        "key": public_jwk.as_dict(),  # representation of the public key in JWK
-        "jti": jti,
-        "htm": http_method,
-        "htu": http_url,
-        "iat": (datetime.datetime.now() - datetime.timedelta(seconds=5)).timestamp()
+        "key": public_jwk.as_dict()  # representation of the public key in JWK
     }
 
     if headers is not None:
         for k in headers.keys():
             header[k] = headers[k]
 
-    if nonce != "":
-        header["nonce"] = nonce
+    # Unique identifier 96 bits random
+    jti = str(base64.b64encode(os.urandom(12)), "utf-8")
+
+    body = {
+        "jti": jti,
+        "htm": http_method,
+        "htu": http_url,  # TODO: normalize the URL
+        "iat": (datetime.datetime.now() - datetime.timedelta(seconds=5)).timestamp()
+    }
 
     if access_token != "":
         base64_token = base64.b64encode(bytes(access_token, "ascii"))
-        h = hashlib.sha256(base64_token).hexdigest()
-        header["ath"] = h
+        body['ath'] = hashlib.sha256(base64_token).hexdigest()
+
+    if nonce != "":
+        body["nonce"] = nonce
 
     encoded_jwt = jwt.encode(
-        body if body is not None else {},
+        body,
         private_key,
         algorithm=alg,  # MUST NOT BE symmetric
         headers=header)
@@ -86,6 +84,8 @@ def validate_dpop_proof(dpop_proof_jwt: str,
                         http_method: str,
                         http_url: str,
                         presented_access_token: str = "",
+                        token_issuer_pubkey: bytes = None,
+                        audience=None,
                         public_keys_nonce: dict[str:str] = None) \
         -> tuple[bool, dict[str:str] | None, dict[str:str] | None]:
     """
@@ -99,7 +99,12 @@ def validate_dpop_proof(dpop_proof_jwt: str,
     :param http_method: the method of the request that contained the dpop proof
     :param http_url: the url of the request that contained the dopo proof
     :param presented_access_token: insert the access token presented by the client in his request to validate it against
+     assumes a JWT access token conform to RFC9068
      the dpop proof
+    :param audience when a client is presenting an access token, the server receiveing the token (the one
+        calling this function) should include its audience value (defined beforehand with the issuer of the token), to
+        be sure the token is meant to be used on him
+    :param token_issuer_pubkey the public key of the issuer to validate the presented access token
     :return: a tuple containing (isvalid, header, body)
     """
 
@@ -113,6 +118,18 @@ def validate_dpop_proof(dpop_proof_jwt: str,
 
     public_key = jwt.algorithms.OKPAlgorithm.from_jwk(header["key"])
 
+    # verify jwk is a public key
+    if not isinstance(public_key, Ed25519PublicKey):
+        return False, None, None
+
+    try:
+        body = jwt.decode(dpop_proof_jwt,
+                          public_key,
+                          header["alg"],
+                          options={"require": REQUIRED_CLAIMS})
+    except (jwt.DecodeError, jwt.MissingRequiredClaimError):
+        return False, None, None
+
     if public_keys_nonce is not None:
         if public_keys_nonce is None:
             raise ValueError("public_keys parameter is None")
@@ -124,7 +141,7 @@ def validate_dpop_proof(dpop_proof_jwt: str,
                 if public_keys_nonce[k] != "":
                     # if nonce is present with key check it wrt the value in the dpop
                     try:
-                        found = (header["nonce"] == public_keys_nonce[k])
+                        found = (body["nonce"] == public_keys_nonce[k])
                     except KeyError:
                         found = False
 
@@ -135,37 +152,46 @@ def validate_dpop_proof(dpop_proof_jwt: str,
                in public_keys_nonce.keys():
             return False, None, None
 
-    # verify jwk is a public key
-    if not isinstance(public_key, Ed25519PublicKey):
+    if body['htm'] != http_method:
         return False, None, None
 
-    try:
-        body = jwt.decode(dpop_proof_jwt, public_key, header["alg"])
-    except jwt.DecodeError:
-        return False, None, None
-
-    try:
-        for i in REQUIRED_CLAIMS:
-            if header[i] is None:
-                return False, None, None
-    except KeyError:
-        return False, None, None
-
-    if header['htm'] != http_method:
-        return False, None, None
-
-    if header["htu"] != http_url:
+    if body["htu"] != http_url:
         # TODO: normalize url check RFC
         return False, None, None
 
-    iat = datetime.datetime.fromtimestamp(header["iat"])
+    iat = datetime.datetime.fromtimestamp(body["iat"])
     if (iat - datetime.datetime.now()) > datetime.timedelta(hours=24):  # TODO: check if it is reasonable
         return False, None, None
 
+    # If an access token is presented, validate it
     if presented_access_token != "":
         base64_token = base64.b64encode(bytes(presented_access_token, "ascii"))
         h = hashlib.sha256(base64_token).hexdigest()
-        if not header["ath"] == h:
+        if not body["ath"] == h:
+            return False, None, None
+
+        if audience is None:
+            return False, None, None
+
+        decoded_at = jwt.decode(presented_access_token,
+                                key=token_issuer_pubkey,
+                                algorithms="EdDSA",
+                                audience=audience)
+
+        if not "cnf" in decoded_at.keys():
+            return False, None, None
+
+        if not "jkt" in decoded_at["cnf"]:
+            return False, None, None
+
+        dpop_pubkey_jwk = authlib.jose.JsonWebKey.import_key(
+            public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+        )
+        dpop_pubkey_thumbprint = dpop_pubkey_jwk.thumbprint()
+
+        # validate jwk thumbprint of public key in cnf field in access token with
+        # jwk thumprint of jwt dpop proof's public key, MUST be the same
+        if dpop_pubkey_thumbprint != decoded_at['cnf']['jkt']:
             return False, None, None
 
     return True, header, body
