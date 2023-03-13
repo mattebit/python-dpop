@@ -23,7 +23,8 @@ def generate_dpop_proof(http_method: str,
                         headers: dict[str: str] = None,
                         alg: str = "EdDSA",
                         nonce: str = "",
-                        access_token: str = ""):
+                        access_token: str = "",
+                        body: dict[str:str] = None):
     """
     Generates a dpop proof JWT. Used by a client to generate a DPoP proof to be send to the server
     :param alg:
@@ -59,22 +60,26 @@ def generate_dpop_proof(http_method: str,
     # Url needs to be cleaned by any query element or fragments https://docs.python.org/3/library/urllib.parse.html
     normalized_url = f"{url_parsed.scheme}://{url_parsed.netloc}{url_parsed.path}"
 
-    body = {
+    b = {
         "jti": jti,
         "htm": http_method,
         "htu": normalized_url,
         "iat": (datetime.datetime.now() - datetime.timedelta(seconds=5)).timestamp()
     }
 
+    if body is not None:
+        for i in body.keys():
+            b[i] = body[i]
+
     if access_token != "":
         base64_token = base64.b64encode(bytes(access_token, "ascii"))
-        body['ath'] = hashlib.sha256(base64_token).hexdigest()
+        b['ath'] = hashlib.sha256(base64_token).hexdigest()
 
     if nonce != "":
-        body["nonce"] = nonce
+        b["nonce"] = nonce
 
     encoded_jwt = jwt.encode(
-        body,
+        b,
         private_key,
         algorithm=alg,  # MUST NOT BE symmetric
         headers=header)
