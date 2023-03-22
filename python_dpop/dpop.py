@@ -68,8 +68,12 @@ def generate_dpop_proof(http_method: str,
     }
 
     if body is not None:
+        if not isinstance(body, dict):
+            raise ValueError("invalid type o body, should be dict")
+
         for i in body.keys():
             b[i] = body[i]
+
 
     if access_token != "":
         base64_token = base64.b64encode(bytes(access_token, "ascii"))
@@ -183,9 +187,12 @@ def validate_dpop_proof(dpop_proof_jwt: str,
         if audience is None:
             return False, None, None
 
+        if token_issuer_pubkey is None:
+            raise ValueError("token issuer public key not provided")
+
         decoded_at = jwt.decode(presented_access_token,
                                 key=token_issuer_pubkey,
-                                algorithms="EdDSA",
+                                algorithms=["EdDSA"],
                                 audience=audience)
 
         if not "cnf" in decoded_at.keys():
