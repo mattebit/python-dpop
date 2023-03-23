@@ -119,7 +119,10 @@ def validate_dpop_proof(dpop_proof_jwt: str,
     :return: a tuple containing (isvalid, header, body)
     """
 
-    header = jwt.get_unverified_header(dpop_proof_jwt)
+    try:
+        header = jwt.get_unverified_header(dpop_proof_jwt)
+    except jwt.exceptions.DecodeError:
+        return False, None, None
 
     if header["typ"] != "dpop+jwt":
         return False, None, None
