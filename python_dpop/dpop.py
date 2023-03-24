@@ -193,6 +193,9 @@ def validate_dpop_proof(dpop_proof_jwt: str,
         if token_issuer_pubkey is None:
             raise ValueError("token issuer public key not provided")
 
+        if not isinstance(token_issuer_pubkey, bytes):
+            raise TypeError("invalid token_issuer_pubkey should be bytes")
+
         decoded_at = jwt.decode(presented_access_token,
                                 key=token_issuer_pubkey,
                                 algorithms=["EdDSA"],
