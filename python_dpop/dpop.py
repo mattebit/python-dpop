@@ -78,7 +78,8 @@ def generate_dpop_proof(http_method: str,
 
     if access_token != "":
         base64_token = base64.b64encode(bytes(access_token, "ascii"))
-        b['ath'] = str(hashlib.sha256(base64_token).digest(), "utf-8") # Change to standard digest
+        h = str(base64.b64encode(hashlib.sha256(base64_token).digest()), "utf-8")
+        b['ath'] = h # Change to standard digest
 
     if nonce != "":
         b["nonce"] = nonce
@@ -185,7 +186,7 @@ def validate_dpop_proof(dpop_proof_jwt: str,
     # If an access token is presented, validate it
     if presented_access_token != "":
         base64_token = base64.b64encode(bytes(presented_access_token, "ascii"))
-        h = str(hashlib.sha256(base64_token).digest(), "utf-8")
+        h = str(base64.b64encode(hashlib.sha256(base64_token).digest()), "utf-8")
         if not body["ath"] == h:
             return False, None, None
 
