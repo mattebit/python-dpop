@@ -46,7 +46,7 @@ def generate_dpop_proof(http_method: str,
 
     header = {
         "typ": "dpop+jwt",
-        "key": public_jwk.as_dict()  # representation of the public key in JWK
+        "key": public_jwk.as_dict()  # TODO: change name to "jwk"
     }
 
     if headers is not None:
@@ -66,6 +66,7 @@ def generate_dpop_proof(http_method: str,
         "htu": normalized_url,
         "iat": (datetime.datetime.now() - datetime.timedelta(seconds=5)).timestamp()
     }
+    # exp claim missing?
 
     if body is not None:
         if not isinstance(body, dict):
@@ -77,7 +78,7 @@ def generate_dpop_proof(http_method: str,
 
     if access_token != "":
         base64_token = base64.b64encode(bytes(access_token, "ascii"))
-        b['ath'] = hashlib.sha256(base64_token).hexdigest()
+        b['ath'] = str(hashlib.sha256(base64_token).digest(), "utf-8") # Change to standard digest
 
     if nonce != "":
         b["nonce"] = nonce
@@ -85,8 +86,9 @@ def generate_dpop_proof(http_method: str,
     encoded_jwt = jwt.encode(
         b,
         private_key,
-        algorithm=alg,  # MUST NOT BE symmetric
-        headers=header)
+        algorithm=alg,
+        headers=header
+    )
 
     return encoded_jwt
 
@@ -183,7 +185,7 @@ def validate_dpop_proof(dpop_proof_jwt: str,
     # If an access token is presented, validate it
     if presented_access_token != "":
         base64_token = base64.b64encode(bytes(presented_access_token, "ascii"))
-        h = hashlib.sha256(base64_token).hexdigest()
+        h = str(hashlib.sha256(base64_token).digest(), "utf-8")
         if not body["ath"] == h:
             return False, None, None
 
