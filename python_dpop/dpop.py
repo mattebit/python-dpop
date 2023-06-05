@@ -144,7 +144,7 @@ def validate_dpop_proof(dpop_proof_jwt: str,
                           public_key,
                           header["alg"],
                           options={"require": REQUIRED_CLAIMS})
-    except (jwt.DecodeError, jwt.MissingRequiredClaimError):
+    except (jwt.DecodeError, jwt.MissingRequiredClaimError, jwt.exceptions.ExpiredSignatureError):
         return False, None, None
 
     if public_keys_nonce is not None:
