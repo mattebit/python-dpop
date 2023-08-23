@@ -16,10 +16,10 @@ def test_generate_dpop_proof():
         private_key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()),
         public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
 
-    print(encoded_jwt)
+
 
     a = jwt.decode(encoded_jwt, public_key, algorithms=["EdDSA"])
-    print(a)
+
 
     encoded_jwt = generate_dpop_proof(
         "GET",
@@ -28,10 +28,10 @@ def test_generate_dpop_proof():
         public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo),
         access_token="a_random1tokenvalues"
     )
-    print(encoded_jwt)
+
 
     a = jwt.decode(encoded_jwt, public_key, algorithms=["EdDSA"])
-    print(a)
+
 
 
 def test_validate_dpop():
