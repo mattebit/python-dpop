@@ -75,11 +75,10 @@ def generate_dpop_proof(http_method: str,
         for i in body.keys():
             b[i] = body[i]
 
-
     if access_token != "":
         base64_token = base64.b64encode(bytes(access_token, "ascii"))
         h = str(base64.b64encode(hashlib.sha256(base64_token).digest()), "utf-8")
-        b['ath'] = h # Change to standard digest
+        b['ath'] = h  # Change to standard digest
 
     if nonce != "":
         b["nonce"] = nonce
@@ -101,7 +100,7 @@ def validate_dpop_proof(dpop_proof_jwt: str,
                         token_issuer_pubkey: bytes = None,
                         audience=None,
                         public_keys_nonce: dict[str:str] = None) \
-        -> tuple[bool, dict[str:str] | None, dict[str:str] | None]:
+        -> tuple[bool, dict[str:str] | str | None, dict[str:str] | None]:
     """
     Used to validate a DPoP proof received from a client.
     :param public_keys_nonce: If you want to check that the dpop jwt is using one of the previous registered public keys
@@ -124,32 +123,32 @@ def validate_dpop_proof(dpop_proof_jwt: str,
 
     try:
         header = jwt.get_unverified_header(dpop_proof_jwt)
-    except jwt.exceptions.DecodeError:
-        return False, None, None
+    except jwt.exceptions.DecodeError as e:
+        return False, f'DecodeError: {e}', None
 
     if header["typ"] != "dpop+jwt":
-        return False, None, None
+        return False, f'header["typ"] = {header["typ"]}', None
 
     if not header["alg"] in SUPPORTED_ALGS:
-        return False, None, None
+        return False, f'header[\"alg\"] = {header["alg"]}', None
 
     public_key = jwt.algorithms.OKPAlgorithm.from_jwk(header["key"])
 
     # verify jwk is a public key
     if not isinstance(public_key, Ed25519PublicKey):
-        return False, None, None
+        return False, "NOT instance(public_key, Ed25519PublicKey)", None
 
     try:
         body = jwt.decode(dpop_proof_jwt,
                           public_key,
                           header["alg"],
                           options={"require": REQUIRED_CLAIMS})
-    except (jwt.DecodeError, jwt.MissingRequiredClaimError, jwt.exceptions.ExpiredSignatureError):
-        return False, None, None
+    except (jwt.DecodeError, jwt.MissingRequiredClaimError, jwt.exceptions.ExpiredSignatureError) as e:
+        return False, f"(jwt.DecodeError, jwt.MissingRequiredClaimError, jwt.exceptions.ExpiredSignatureError): {e}", None
 
     if public_keys_nonce is not None:
         if public_keys_nonce is None:
-            raise ValueError("public_keys parameter is None")
+            return False, "public_keys parameter is None", None
 
         found = False
         for k in public_keys_nonce.keys():
@@ -163,41 +162,41 @@ def validate_dpop_proof(dpop_proof_jwt: str,
                         found = False
 
         if not found:
-            return False, None, None
+            return False, f"{k} not in public_keys_nonce.keys()", None
 
         if not str(public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo), "utf-8") \
                in public_keys_nonce.keys():
-            return False, None, None
+            return False, "Not PEM", None
 
     if body['htm'] != http_method:
-        return False, None, None
+        return False, f'HTM: {body["htm"]} != {http_method}', None
 
     url_parsed = urlparse(http_url)
     # Url needs to be cleaned by any query element or fragments https://docs.python.org/3/library/urllib.parse.html
     normalized_url = f"{url_parsed.scheme}://{url_parsed.netloc}{url_parsed.path}"
 
     if body["htu"] != normalized_url:
-        return False, None, None
+        return False, f'HTU: received {body["htu"]} != local check {normalized_url}', None
 
     iat = datetime.datetime.fromtimestamp(body["iat"])
     if (iat - datetime.datetime.now()) > datetime.timedelta(hours=24):  # TODO: check if it is reasonable
-        return False, None, None
+        return False, "IAT!", None
 
     # If an access token is presented, validate it
     if presented_access_token != "":
         base64_token = base64.b64encode(bytes(presented_access_token, "ascii"))
         h = str(base64.b64encode(hashlib.sha256(base64_token).digest()), "utf-8")
         if not body["ath"] == h:
-            return False, None, None
+            return False, f'ATH: {body["ath"]} != {h}', None
 
         if audience is None:
-            return False, None, None
+            return False, "Audience is None", None
 
         if token_issuer_pubkey is None:
-            raise ValueError("token issuer public key not provided")
+            return False, "token issuer public key not provided", None
 
         if not isinstance(token_issuer_pubkey, bytes):
-            raise TypeError("invalid token_issuer_pubkey should be bytes")
+            return False, "Invalid token_issuer_pubkey should be bytes", None
 
         decoded_at = jwt.decode(presented_access_token,
                                 key=token_issuer_pubkey,
@@ -205,10 +204,10 @@ def validate_dpop_proof(dpop_proof_jwt: str,
                                 audience=audience)
 
         if not "cnf" in decoded_at.keys():
-            return False, None, None
+            return False, "NOT \"cnf\" in decoded_at.keys()", None
 
         if not "jkt" in decoded_at["cnf"]:
-            return False, None, None
+            return False, "NOT \"jkt\" in decoded_at[\"cnf\"]", None
 
         dpop_pubkey_jwk = authlib.jose.JsonWebKey.import_key(
             public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
@@ -218,6 +217,6 @@ def validate_dpop_proof(dpop_proof_jwt: str,
         # validate jwk thumbprint of public key in cnf field in access token with
         # jwk thumprint of jwt dpop proof's public key, MUST be the same
         if dpop_pubkey_thumbprint != decoded_at['cnf']['jkt']:
-            return False, None, None
+            return False, f'Thumbprint: {dpop_pubkey_thumbprint} != {decoded_at["cnf"]["jkt"]}', None
 
     return True, header, body
